@@ -36,11 +36,11 @@ void init_search_parser(sharg::parser & parser, search_arguments & arguments)
                       sharg::config{.short_id = 'e',
                       .long_id = "error-rate",
                       .description = "Choose the maximum allowed error rate of a local match.",
-                      .validator = sharg::arithmetic_range_validator{0.0f, 0.1f}});
+                      .validator = sharg::arithmetic_range_validator{0.0f, 0.2f}});
     parser.add_option(arguments.pattern_size,
                       sharg::config{.short_id = '\0',
                       .long_id = "pattern",
-                      .description = "Choose the minimium length of a local alignment. Default: half of first query sequence."});
+                      .description = "Choose the size of the approximate seed."});
     parser.add_flag(arguments.fast,
                       sharg::config{.short_id = '\0',
                       .long_id = "fast",
@@ -138,7 +138,12 @@ void init_search_parser(sharg::parser & parser, search_arguments & arguments)
                     .long_id = "max-queued-carts",
                     .description = "Maximal number of carts that are full and are waiting to be processed.",
                     .advanced = true});
-    //!TODO: add section for stellar options
+
+    parser.add_subsection("Stellar options");
+    parser.add_option(arguments.minLength,
+                      sharg::config{.short_id = '\0',
+                      .long_id = "minLength",
+                      .description = "Choose the minimium length of a local alignment."});
     parser.add_option(arguments.disableThresh,
                     sharg::config{.short_id = '\0',
                     .long_id = "disableThresh",
@@ -212,20 +217,7 @@ void run_search(sharg::parser & parser)
     // ==========================================
     if (parser.is_option_set("seg-count"))
     {
-        if (!arguments.manual_parameters)
-        {
-            std::cerr << "WARNING: segment count will be adjusted to match database metadata. "
-                      << "Set --without-parameter-tuning to force manual input.\n"; 
-        }
-    }
-    else
-    {
-        //!TODO: can this be removed?
-        if (arguments.split_query && arguments.manual_parameters)
-        {
-            throw std::runtime_error{"Provide the chosen number of query segments with --seg-count "
-                                     "or remove --without-parameter-tuning to deduce an optimal value from reference metadata."};
-        }
+        arguments.split_query = true;
     }
 
     // ==========================================
@@ -336,6 +328,18 @@ void run_search(sharg::parser & parser)
         search_error_profile error_profile = search_profile.get_error_profile(arguments.errors);
         // seg_count is inferred in metadata constructor
         arguments.search_type = error_profile.search_type;
+        if (parser.is_option_set("threshold"))
+        {
+            auto lemma_thresh = kmer_lemma_threshold(arguments.pattern_size, arguments.shape_weight, arguments.errors);
+            if (arguments.threshold > lemma_thresh)
+                arguments.search_type = search_kind::HEURISTIC;
+            else 
+            {
+                arguments.search_type = search_kind::LEMMA;
+                if (arguments.threshold < lemma_thresh)
+                    std::cerr << "[Warning] chosen threshold is less than the k-mer lemma threshold. Ignore this warning if this was deliberate.";
+            }
+        }
         if (arguments.search_type == search_kind::STELLAR)
         {
             std::cout << "Can not prefilter matches of length " << std::to_string(error_profile.pattern.l) << 
@@ -383,6 +387,9 @@ void run_search(sharg::parser & parser)
 
     if (arguments.stellar_only)
         arguments.search_type = search_kind::STELLAR;
+
+    if (!parser.is_option_set("minLength"))
+        arguments.minLength = arguments.pattern_size;
 
     // ==========================================
     // Dispatch
